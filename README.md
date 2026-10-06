@@ -11,9 +11,9 @@ machine's CPU and memory and answers:
 | --- | --- | --- |
 | **pass** | CPU idle ≥ 40% and memory free ≥ 30% | silent |
 | **warning** | CPU idle < 40% or memory free < 30% | the command runs; the agent is told to keep it scoped |
-| **error** | CPU idle < 25%, memory free < 20%, load ≥ 8 × CPU count, or another heavy command started < 20 s ago | the command is blocked with the reason; the agent does other work and retries later |
+| **error** | CPU idle < 25%, memory free < 20%, or load ≥ 8 × CPU count | the command is blocked with the reason; the agent does other work and retries later |
 
-The 20 s spacing stops twelve sessions from launching builds in the same second.
+It reads utilization at that moment and nothing else: no slots, no queue, no state between calls.
 
 **Override:** write the command as `HEADROOM_OVERRIDE=1 <cmd>`. It runs with a warning. Treat it as
 a human's call, not the agent's.
@@ -52,7 +52,7 @@ hooks = true
 /plugin install headroom@headroom
 ```
 
-Installing both is harmless: the same command arriving twice within 5 s counts as one start.
+Pick one of the two: with both, every heavy command is measured twice.
 
 ## use
 
@@ -65,8 +65,7 @@ headroom uninstall  # remove the hook (add --claude or --codex for one harness)
 cpu idle  57% (warn < 40%, error < 25%)
 memory    69% free (warn < 30%, error < 20%)
 load      13.9 (error at 88, 11 cpus)
-last      heavy start 4s ago (settle 20s)
-next      error — last heavy start 4s ago < 20s settle
+next      pass
 ```
 
 ## tune
@@ -80,9 +79,6 @@ Every threshold is an environment variable read by the hook:
 | `HEADROOM_CPU_IDLE` | 25 |
 | `HEADROOM_MEMORY_FREE` | 20 |
 | `HEADROOM_LOAD` | 8 × CPU count |
-| `HEADROOM_SETTLE` | 20 (seconds) |
-
-State (the last heavy start) lives in `~/.local/state/headroom/`.
 
 ## why a hook, not a wrapper
 

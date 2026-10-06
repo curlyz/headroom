@@ -8,9 +8,10 @@ current utilization:
 
   pass     cpu idle >= HEADROOM_WARN_CPU_IDLE (40) and memory free >= HEADROOM_WARN_MEMORY_FREE (30)
   warning  below either warn floor: the command runs, the agent is told to keep it scoped
-  error    cpu idle < HEADROOM_CPU_IDLE (25), memory free < HEADROOM_MEMORY_FREE (20),
-           1-minute load >= HEADROOM_LOAD (8 x cpu count), or the last heavy start was
-           under HEADROOM_SETTLE (20) seconds ago: the command is denied with the reason
+  error    cpu idle < HEADROOM_CPU_IDLE (25), memory free < HEADROOM_MEMORY_FREE (20), or
+           1-minute load >= HEADROOM_LOAD (8 x cpu count): the command is denied with the reason
+
+It only reads utilization at that moment: no slots, no queue, no state between calls.
 
 Write a command as `HEADROOM_OVERRIDE=1 <cmd>` to override (a human's call).
 
@@ -22,7 +23,6 @@ Write a command as `HEADROOM_OVERRIDE=1 <cmd>` to override (a human's call).
 macOS and Linux. Python 3.8+, standard library only.
 """
 import argparse
-import fcntl
 import json
 import os
 import re
@@ -32,8 +32,7 @@ import subprocess
 import sys
 import time
 
-VERSION = "1.0.0"
-STATE_DIR = os.path.join(os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"), "headroom")
+VERSION = "1.1.0"
 EXIT_BUSY = 1
 
 
@@ -55,10 +54,6 @@ def warn_cpu_idle():
 
 def warn_memory_free():
     return env_number("HEADROOM_WARN_MEMORY_FREE", 30)
-
-
-def settle_seconds():
-    return env_number("HEADROOM_SETTLE", 20)
 
 
 def load_limit():
@@ -115,33 +110,8 @@ def read_memory_free():
         return None
 
 
-def seconds_since_start():
-    try:
-        return time.time() - os.path.getmtime(os.path.join(STATE_DIR, "last-start"))
-    except OSError:
-        return None
-
-
-def stamp_start(command=""):
-    os.makedirs(STATE_DIR, exist_ok=True)
-    with open(os.path.join(STATE_DIR, "last-start"), "w") as handle:
-        handle.write(command)
-
-
-def same_start(command):
-    """the same command stamped seconds ago: a second hook for one tool call (plugin + settings)."""
-    since = seconds_since_start()
-    try:
-        with open(os.path.join(STATE_DIR, "last-start")) as handle:
-            return since is not None and since < 5 and handle.read() == command
-    except OSError:
-        return False
-
-
-def blockers_for(load, memory_free, cpu_idle, since_start):
+def blockers_for(load, memory_free, cpu_idle):
     blockers = []
-    if since_start is not None and since_start < settle_seconds():
-        blockers.append(f"last heavy start {since_start:.0f}s ago < {settle_seconds():.0f}s settle")
     if cpu_idle is not None and cpu_idle < idle_floor():
         blockers.append(f"cpu idle {cpu_idle:.0f}% < {idle_floor():.0f}%")
     if load >= load_limit():
@@ -217,24 +187,16 @@ def run_hook(harness):
     if payload.get("tool_name") not in ("Bash", "shell", "exec_command") or not is_heavy(command):
         return 0
     if re.search(r"\bHEADROOM_OVERRIDE=1\b", command):
-        stamp_start(command)
         return hook_reply(harness, warning="headroom: HEADROOM_OVERRIDE=1, resource gate overridden")
-    os.makedirs(STATE_DIR, exist_ok=True)
-    with open(os.path.join(STATE_DIR, "hook.lock"), "w") as lock:
-        # one session measures at a time, so two hooks never both pass the settle window
-        fcntl.flock(lock, fcntl.LOCK_EX)
-        if same_start(command):
-            return 0
-        load, memory_free, cpu_idle = os.getloadavg()[0], read_memory_free(), read_cpu_idle()
-        blockers = blockers_for(load, memory_free, cpu_idle, seconds_since_start())
-        if blockers:
-            reason = (
-                f"headroom: error, the machine has no headroom ({'; '.join(blockers)}). "
-                "do non-heavy work and retry later; never loop a retry. "
-                "`HEADROOM_OVERRIDE=1 <cmd>` overrides, only on a human's say-so."
-            )
-            return hook_reply(harness, decision="deny", reason=reason)
-        stamp_start(command)
+    load, memory_free, cpu_idle = os.getloadavg()[0], read_memory_free(), read_cpu_idle()
+    blockers = blockers_for(load, memory_free, cpu_idle)
+    if blockers:
+        reason = (
+            f"headroom: error, the machine has no headroom ({'; '.join(blockers)}). "
+            "do non-heavy work and retry later; never loop a retry. "
+            "`HEADROOM_OVERRIDE=1 <cmd>` overrides, only on a human's say-so."
+        )
+        return hook_reply(harness, decision="deny", reason=reason)
     tight = []
     if cpu_idle is not None and cpu_idle < warn_cpu_idle():
         tight.append(f"cpu idle {cpu_idle:.0f}% < {warn_cpu_idle():.0f}%")
@@ -249,13 +211,12 @@ def run_hook(harness):
 
 
 def print_status():
-    load, memory_free, cpu_idle, since = os.getloadavg()[0], read_memory_free(), read_cpu_idle(), seconds_since_start()
+    load, memory_free, cpu_idle = os.getloadavg()[0], read_memory_free(), read_cpu_idle()
     shown = lambda value: "?" if value is None else f"{value:.0f}%"
     print(f"cpu idle  {shown(cpu_idle)} (warn < {warn_cpu_idle():.0f}%, error < {idle_floor():.0f}%)")
     print(f"memory    {shown(memory_free)} free (warn < {warn_memory_free():.0f}%, error < {memory_floor():.0f}%)")
     print(f"load      {load:.1f} (error at {load_limit():.0f}, {os.cpu_count()} cpus)")
-    print("last      " + ("no heavy start yet" if since is None else f"heavy start {since:.0f}s ago (settle {settle_seconds():.0f}s)"))
-    blockers = blockers_for(load, memory_free, cpu_idle, since)
+    blockers = blockers_for(load, memory_free, cpu_idle)
     print("next      " + ("pass" if not blockers else "error — " + "; ".join(blockers)))
     return 0 if not blockers else EXIT_BUSY
 
