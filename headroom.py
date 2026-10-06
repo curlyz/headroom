@@ -40,7 +40,7 @@ import subprocess
 import sys
 import time
 
-VERSION = "2.0.0"
+VERSION = "2.0.1"
 EXIT_BUSY = 1
 EXIT_TIMEOUT = 124
 SAMPLE_SECONDS = 0.2
@@ -130,11 +130,13 @@ def below(usage, kind):
 
 
 def leading_variables(command):
-    """the NAME=value words before the first command word."""
+    """the NAME=value words before the first command word, read from the first line only
+    (a heredoc or multi-line script below it may hold any quoting)."""
+    first_line = command.lstrip().split("\n", 1)[0]
     try:
-        words = shlex.split(command)
+        words = shlex.split(first_line)
     except ValueError:
-        return {}
+        words = first_line.split()
     variables = {}
     for word in words:
         name, equals, value = word.partition("=")

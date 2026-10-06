@@ -1,6 +1,6 @@
 {
   "name": "headroom",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "Resource gate for coding agents: decides every Bash command purely on CPU, memory and disk headroom, and stops each command at the timeout the agent estimated (HEADROOM_TIMEOUT), so parallel agent sessions never freeze it.",
   "author": { "name": "curlyz" },
   "homepage": "https://github.com/curlyz/headroom",
