@@ -6,10 +6,12 @@ typecheck and dev server at once can freeze it. headroom sits in the harness hoo
 (Claude Code, Codex) and answers every heavy Bash command from the machine's
 current utilization:
 
-  pass     cpu idle >= HEADROOM_WARN_CPU_IDLE (40) and memory free >= HEADROOM_WARN_MEMORY_FREE (30)
-  warning  below either warn floor: the command runs, the agent is told to keep it scoped
-  error    cpu idle < HEADROOM_CPU_IDLE (25), memory free < HEADROOM_MEMORY_FREE (20), or
-           1-minute load >= HEADROOM_LOAD (8 x cpu count): the command is denied with the reason
+  pass     cpu idle >= 40%, memory free >= 30% and disk free >= 15%
+  warning  below any warn floor: the command runs, the agent is told to keep it scoped
+  error    cpu idle < 25%, memory free < 20% or disk free < 5%: the command is denied with the reason
+
+Three resources, read at that moment: cpu (idle over the last second), memory (available)
+and disk (free space on the filesystem of the command's working directory).
 
 It only reads utilization at that moment: no slots, no queue, no state between calls.
 
@@ -32,7 +34,7 @@ import subprocess
 import sys
 import time
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 EXIT_BUSY = 1
 
 
@@ -56,10 +58,12 @@ def warn_memory_free():
     return env_number("HEADROOM_WARN_MEMORY_FREE", 30)
 
 
-def load_limit():
-    # load counts threads blocked on io (indexers, backups), so it is only the crash
-    # ceiling; cpu idle is the real signal
-    return env_number("HEADROOM_LOAD", 8 * (os.cpu_count() or 8))
+def disk_floor():
+    return env_number("HEADROOM_DISK_FREE", 5)
+
+
+def warn_disk_free():
+    return env_number("HEADROOM_WARN_DISK_FREE", 15)
 
 
 def read_cpu_idle():
@@ -110,15 +114,31 @@ def read_memory_free():
         return None
 
 
-def blockers_for(load, memory_free, cpu_idle):
-    blockers = []
-    if cpu_idle is not None and cpu_idle < idle_floor():
-        blockers.append(f"cpu idle {cpu_idle:.0f}% < {idle_floor():.0f}%")
-    if load >= load_limit():
-        blockers.append(f"load {load:.1f} >= {load_limit():.0f}")
-    if memory_free is not None and memory_free < memory_floor():
-        blockers.append(f"memory free {memory_free:.0f}% < {memory_floor():.0f}%")
-    return blockers
+def read_disk_free(path):
+    """percent free on the filesystem holding path, or None when it cannot be read."""
+    try:
+        usage = shutil.disk_usage(path if os.path.isdir(path) else os.path.expanduser("~"))
+    except OSError:
+        return None
+    return 100.0 * usage.free / usage.total if usage.total else None
+
+
+def read_usage(path):
+    return {"cpu idle": read_cpu_idle(), "memory free": read_memory_free(), "disk free": read_disk_free(path)}
+
+
+def floors(kind):
+    if kind == "error":
+        return {"cpu idle": idle_floor(), "memory free": memory_floor(), "disk free": disk_floor()}
+    return {"cpu idle": warn_cpu_idle(), "memory free": warn_memory_free(), "disk free": warn_disk_free()}
+
+
+def below(usage, kind):
+    return [
+        f"{name} {value:.0f}% < {floors(kind)[name]:.0f}%"
+        for name, value in usage.items()
+        if value is not None and value < floors(kind)[name]
+    ]
 
 
 HEAVY_TOOLS = re.compile(
@@ -188,37 +208,32 @@ def run_hook(harness):
         return 0
     if re.search(r"\bHEADROOM_OVERRIDE=1\b", command):
         return hook_reply(harness, warning="headroom: HEADROOM_OVERRIDE=1, resource gate overridden")
-    load, memory_free, cpu_idle = os.getloadavg()[0], read_memory_free(), read_cpu_idle()
-    blockers = blockers_for(load, memory_free, cpu_idle)
-    if blockers:
+    usage = read_usage(payload.get("cwd") or os.getcwd())
+    errors = below(usage, "error")
+    if errors:
         reason = (
-            f"headroom: error, the machine has no headroom ({'; '.join(blockers)}). "
+            f"headroom: error, the machine has no headroom ({'; '.join(errors)}). "
             "do non-heavy work and retry later; never loop a retry. "
             "`HEADROOM_OVERRIDE=1 <cmd>` overrides, only on a human's say-so."
         )
         return hook_reply(harness, decision="deny", reason=reason)
-    tight = []
-    if cpu_idle is not None and cpu_idle < warn_cpu_idle():
-        tight.append(f"cpu idle {cpu_idle:.0f}% < {warn_cpu_idle():.0f}%")
-    if memory_free is not None and memory_free < warn_memory_free():
-        tight.append(f"memory free {memory_free:.0f}% < {warn_memory_free():.0f}%")
-    if tight:
+    warnings = below(usage, "warn")
+    if warnings:
         return hook_reply(
             harness,
-            warning=f"headroom: warning, the machine is getting tight ({'; '.join(tight)}); scope this command to what you touched",
+            warning=f"headroom: warning, the machine is getting tight ({'; '.join(warnings)}); scope this command to what you touched",
         )
     return 0
 
 
 def print_status():
-    load, memory_free, cpu_idle = os.getloadavg()[0], read_memory_free(), read_cpu_idle()
-    shown = lambda value: "?" if value is None else f"{value:.0f}%"
-    print(f"cpu idle  {shown(cpu_idle)} (warn < {warn_cpu_idle():.0f}%, error < {idle_floor():.0f}%)")
-    print(f"memory    {shown(memory_free)} free (warn < {warn_memory_free():.0f}%, error < {memory_floor():.0f}%)")
-    print(f"load      {load:.1f} (error at {load_limit():.0f}, {os.cpu_count()} cpus)")
-    blockers = blockers_for(load, memory_free, cpu_idle)
-    print("next      " + ("pass" if not blockers else "error — " + "; ".join(blockers)))
-    return 0 if not blockers else EXIT_BUSY
+    usage = read_usage(os.getcwd())
+    for name, value in usage.items():
+        shown = "?" if value is None else f"{value:.0f}%"
+        print(f"{name:<12}{shown:>5}   (warn < {floors('warn')[name]:.0f}%, error < {floors('error')[name]:.0f}%)")
+    errors, warnings = below(usage, "error"), below(usage, "warn")
+    print("next heavy  " + ("error — " + "; ".join(errors) if errors else "warning — " + "; ".join(warnings) if warnings else "pass"))
+    return EXIT_BUSY if errors else 0
 
 
 def hook_command(harness, executable):

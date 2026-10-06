@@ -4,14 +4,15 @@ A resource gate for coding agents. When several Claude Code or Codex sessions sh
 machine, each one starting its own build, lint, typecheck, test run and dev server at the
 same moment can push the load past what the machine survives. Sessions die mid-edit.
 
-headroom is a **PreToolUse hook**. Before an agent runs a heavy Bash command, it reads the
-machine's CPU and memory and answers:
+headroom is a **PreToolUse hook**. Before an agent runs a heavy Bash command, it reads three
+resources at that moment, CPU (idle over the last second), memory (available) and disk (free
+space where the command runs), and answers:
 
 | answer | when | effect |
 | --- | --- | --- |
-| **pass** | CPU idle ≥ 40% and memory free ≥ 30% | silent |
-| **warning** | CPU idle < 40% or memory free < 30% | the command runs; the agent is told to keep it scoped |
-| **error** | CPU idle < 25%, memory free < 20%, or load ≥ 8 × CPU count | the command is blocked with the reason; the agent does other work and retries later |
+| **pass** | CPU idle ≥ 40%, memory free ≥ 30% and disk free ≥ 15% | silent |
+| **warning** | CPU idle < 40%, memory free < 30% or disk free < 15% | the command runs; the agent is told to keep it scoped |
+| **error** | CPU idle < 25%, memory free < 20% or disk free < 5% | the command is blocked with the reason; the agent does other work and retries later |
 
 It reads utilization at that moment and nothing else: no slots, no queue, no state between calls.
 
@@ -62,10 +63,10 @@ headroom uninstall  # remove the hook (add --claude or --codex for one harness)
 ```
 
 ```
-cpu idle  57% (warn < 40%, error < 25%)
-memory    69% free (warn < 30%, error < 20%)
-load      13.9 (error at 88, 11 cpus)
-next      pass
+cpu idle      62%   (warn < 40%, error < 25%)
+memory free   69%   (warn < 30%, error < 20%)
+disk free      6%   (warn < 15%, error < 5%)
+next heavy  warning — disk free 6% < 15%
 ```
 
 ## tune
@@ -78,7 +79,8 @@ Every threshold is an environment variable read by the hook:
 | `HEADROOM_WARN_MEMORY_FREE` | 30 |
 | `HEADROOM_CPU_IDLE` | 25 |
 | `HEADROOM_MEMORY_FREE` | 20 |
-| `HEADROOM_LOAD` | 8 × CPU count |
+| `HEADROOM_WARN_DISK_FREE` | 15 |
+| `HEADROOM_DISK_FREE` | 5 |
 
 ## why a hook, not a wrapper
 
