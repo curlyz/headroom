@@ -1,7 +1,7 @@
 {
   "name": "headroom",
-  "version": "1.0.0",
-  "description": "Resource gate for coding agents: warns or blocks heavy Bash commands (build, lint, test, install, deploy) when the machine has no CPU or memory headroom, so parallel agent sessions never freeze it.",
+  "version": "2.0.0",
+  "description": "Resource gate for coding agents: decides every Bash command purely on CPU, memory and disk headroom, and stops each command at the timeout the agent estimated (HEADROOM_TIMEOUT), so parallel agent sessions never freeze it.",
   "author": { "name": "curlyz" },
   "homepage": "https://github.com/curlyz/headroom",
   "repository": "https://github.com/curlyz/headroom",

@@ -5,7 +5,7 @@
     {
       "name": "headroom",
       "source": "./",
-      "description": "Warns or blocks heavy Bash commands when the machine has no CPU or memory headroom."
+      "description": "Decides every Bash command purely on CPU, memory and disk headroom; enforces the agent-estimated HEADROOM_TIMEOUT."
     }
   ]
 }

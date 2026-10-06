@@ -1,5 +1,5 @@
 {
-  "description": "headroom: warn or block heavy Bash commands by CPU and memory utilization",
+  "description": "headroom: gate every Bash command on CPU, memory and disk; enforce HEADROOM_TIMEOUT",
   "hooks": {
     "PreToolUse": [
       {
