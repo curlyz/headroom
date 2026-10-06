@@ -1,0 +1,17 @@
+{
+  "description": "headroom: warn or block heavy Bash commands by CPU and memory utilization",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/headroom.py\" hook --harness claude",
+            "timeout": 20
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "name": "headroom",
+  "owner": { "name": "curlyz", "url": "https://github.com/curlyz" },
+  "plugins": [
+    {
+      "name": "headroom",
+      "source": "./",
+      "description": "Warns or blocks heavy Bash commands when the machine has no CPU or memory headroom."
+    }
+  ]
+}
